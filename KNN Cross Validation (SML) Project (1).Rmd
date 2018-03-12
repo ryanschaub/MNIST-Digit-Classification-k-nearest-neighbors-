@@ -1,0 +1,321 @@
+---
+title: 'Digit Recognition using KNN Method (SML)'
+author: "Ryan Schaub 25507383"
+date: "8/10/2017"
+output: html_document
+---
+
+#I. Read the .csv files into R and determine an appropriate data structure
+
+```{r training Data}
+library(ggplot2)
+
+#read in MNIST training data set as data frame
+train = read.csv("trainProject.csv")
+
+# Remove any NAs from train data set
+train = train[rowSums(is.na(train)) == 0,]
+```
+
+```{r test data}
+test = read.csv("testProject.csv")
+```
+
+*For imaging purposes, the traindata will be parsed into 5000 28 by 28 matrices (each matrix corresponding to one digital image of handwritten digit)*
+
+```{r training array}
+#create 3-dimensional array with 5000, 28 by 28 matrices
+train.labels = train$label
+
+#transpose the unlisted df to get correct placement of integers in matrices
+train.array = array(unlist(t(train[,-1])), dim = c(28, 28, 5000))
+
+#imaging shows y coordinates need to be "flipped"
+train.array = train.array[,28:1,]
+```
+
+```{r test array}
+#create 3-dimensional array with 5000, 28 by 28 matrices
+#transpose the unlisted df to get correct placement of integers in matrices
+test.array = array(unlist(t(test[,-1])), dim = c(28, 28, 5000))
+
+#imaging shows y coordinates need to be "flipped"
+test.array = test.array[,28:1,]
+```
+
+#II. Create a plotting function to view the images
+
+```{r}
+#array input: test.array or train.array
+#index input: index position of specific obs. or row of data set --example: 6 corresponds to 6th matrix (digit matrix) in multidementsional array or matrices
+#this function will allow us to plot any single digital image of a handwritten digit within the test or training array
+
+plot_digit = function( array, index, point.size = 1 ){
+  
+  m = nrow(array[,,index])
+  n = ncol(array[,,index])
+  xy.grid = expand.grid( 1:m, 1:n )
+  
+  plotDF = data.frame(
+    x.coord = xy.grid[,2],
+    y.coord = rev(xy.grid[,1]),
+    shade=as.numeric(c(array[,,index]
+  )))
+  
+  ggplot( plotDF, aes(x = x.coord, y = y.coord, color = shade) ) +
+    geom_point( shape = 15, size = 11 ) + coord_fixed() +
+    theme( axis.line=element_blank(), axis.text.x=element_blank(), axis.text.y=element_blank(), axis.ticks=element_blank(), axis.title.x=element_blank(), axis.title.y=element_blank(), legend.position="none", panel.background=element_blank(), panel.border=element_blank(), panel.grid.major=element_blank(), panel.grid.minor=element_blank(), plot.background=element_blank()) +
+    scale_color_gradient(low="white", high="black") +
+    coord_flip() +
+    scale_y_reverse()
+}
+
+#example: here we plot the 158th matirx from the array "train.array" (image is a handwritten "4")
+plot_digit(train.array, 158)
+```
+
+#III. Create a holdout set and a cross-validation set with folds
+
+*The Hold-out set cross validation will consist of a hold out set that will be a 25% (1250 observations) of the rows (randomly generated) from the training (labeled) set and the remainder of the training (labeled) set (3750 observations) will be the cross-validation set split into 5 folds (750 observations each) with each observation from the this set randomly assigned to a fold by creating a data frame of the crossvalidation set and randomly assigning the indices of each row to a fold using the randomly ordered folds in the fold data frame (see code below).*
+
+```{r createFolds}
+# First, create a holdout set
+set.seed(0)
+hdt_ind = sample(nrow(train), 1250) # 1250 = 25% of 5000
+
+# Split into holdout df and a df for the cross validation
+holdout_df = train[hdt_ind,]
+crossvalid_df = train[-hdt_ind,]
+
+# Next, assign folds
+nFold = 5
+fold_df = data.frame( fold = rep(1:nFold, 
+                                 each = nrow(crossvalid_df)/nFold) )
+
+# Randomly order the folds
+fold_df$position = sample(nrow(fold_df))
+# and re-sort 
+fold_df = fold_df[order(fold_df$position),]
+
+# Double check that we have the correct number of observations in each fold:
+table(fold_df$fold)
+
+# Add this variable to the "crossvalid_df" data frame:
+crossvalid_df$fold = fold_df$fold
+```
+
+*IV. R code*
+*Write R code to conduct k-nearest neighbor classification and calculate the misclassification rate (for the labeled data).*
+
+*1. Calculate distances between multivariate features*
+*2. Find the k nearest neighbors*  
+*3. Make a classification based on the NN*  
+*4. Calculate error (misclassification) rate*
+
+```{r calcDist}
+# Inputs: 
+# trainFeat  is a m x n matrix of the features for the
+#            training data
+# testFeat   is a l x n matrix of the features for the 
+#            test data
+calcDist = function(testFeat, trainFeat){
+  m = nrow(trainFeat) # Number of observations in the training data
+  n = ncol(trainFeat) # Number of features
+  
+  # Calculate the squared distances using apply
+  sq_distances = apply(testFeat, 1, function(x){ 
+    test_j = matrix(x, nrow = m, ncol = n, byrow = TRUE)
+    apply( (trainFeat - test_j)^2, 1, sum) })
+  
+  # Return the transpose: we want "distances" to be an l by m matrix
+  return(t(sqrt(sq_distances)))
+}
+```
+
+```{r findNN}
+# Inputs: 
+# distances  is a l x m matrix of distances between the 
+#            test and training features (from calcDist)
+# k          is the number of neighbors we want
+findNN = function(distances, k){
+  # For each row, pick out the indices of the k nearest neighbors
+  NNmat = apply(distances, 1, order)[1:k, ]
+  # Again, return the transpose: want this to be l by k
+  return(t(NNmat))
+}
+```
+
+```{r classifyNN}
+# Inputs: 
+# NNmat is a l x k matrix containing the NN indices
+# trainLabels  is a vector of the known labels for the training
+# set observations
+classifyNN = function( NNmat, trainLabels){
+  # Identify the labels of the nearest neighbors and
+  # put into a l x k matrix
+  classNN = matrix( trainLabels[ NNmat ], byrow = FALSE, ncol = ncol(NNmat))
+  # Summarize the neighbors
+  NNprop = apply(classNN, 1, function(x){
+    names(which.max(table(x)))
+  })
+  # Classify by most occuring nearest neighbor
+  classify = NNprop
+  
+  return( classify )
+}
+```
+
+*Wrapper function that conducts k-NN for one fold at a time and use to run chosen model on hold out set later on as well as unlabeled test data*
+
+```{r kNNwrapper}
+predict_kNN = function( trainFeat, trainLabel, testFeat, k ){
+  
+  # Make sure trainFeat and testFeat are numeric matrices
+  if( is.matrix(trainFeat) == FALSE | is.matrix(testFeat) == FALSE ){
+    stop("trainFeat and testFeat must be matrices.")
+  }
+  
+  # Step 1: calculate distances
+  sampleDist = calcDist( testFeat = testFeat, trainFeat = trainFeat )
+  # Step 2: find the nearest neighbors
+  sampleNN = findNN(distances = sampleDist, k = k)
+  # Step 3: classify
+  sampleClass = as.integer(classifyNN( NNmat = sampleNN, trainLabels = trainLabel ))
+  #sampleClass
+  return(sampleClass)
+}
+```
+
+```{r calcError}
+calcError = function(sampleClass, testLabel){
+  
+  compare = data.frame( truth = testLabel, predict = sampleClass )
+
+error = sum(compare$truth != compare$predict)/length(compare$truth) 
+
+return(error)
+}
+
+```
+
+
+*V. Model selection*
+
+*Identify a set of candidate models (i.e., values of k), and use your code from Task IV to choose the best model (i.e., minimizes the classification error).*
+
+*Loop over folds and k values to produce prediction_matrix*
+
+```{r}
+# Storage: empty matrix with one row for each obs, one column
+# for each model (ranging over k = 1,...,20)
+prediction_matrix = matrix(NA, nrow = nrow(crossvalid_df), ncol = 20)
+
+# Conduct k-NN: using all available features
+for( f in 1:nFold ){
+  for( k in 1:20){
+    prediction_matrix[crossvalid_df$fold == f,k] = predict_kNN( 
+      trainFeat = data.matrix( crossvalid_df[crossvalid_df$fold != f,2:785] ),
+      trainLabel = crossvalid_df$label[crossvalid_df$fold != f],
+      testFeat = data.matrix( crossvalid_df[crossvalid_df$fold == f,2:785] ), k = k )
+  }
+  # Print progress
+  cat(f, " ")
+}
+```
+
+*Calculate the error rate for the different k values tested above using cross validation*
+```{r calcErrorMat}
+calcErrorMat = function( prediction_matrix, trueLabels ){
+  errorRates = apply(prediction_matrix, 2, function(x){
+    sum(x != trueLabels)/length(x)
+    return(errorRates*100)
+  })
+}
+
+# Now, calculate error rates for each model
+errorRates = calcErrorMat( prediction_matrix, crossvalid_df$label )
+errorRates
+
+#These are the 20 error rates for each respective k value (amount of nearest neighbors) generated from the cross-validation on the hold-out set from the training data. Running these potential models is computationally intensive (and takes over an hour to run for all folds and k values). We will use the error rates from this one run below to choose my model (k value).
+#[1] 88.293333  9.173333  7.413333  7.413333
+#[5]  7.920000  8.026667  8.346667  8.560000
+#[9]  8.693333  8.800000  9.013333  8.933333
+#[13]  9.093333  9.066667  9.440000  9.680000
+#[17]  9.946667  9.760000  9.920000 10.213333
+```
+
+```{r plotErrors}
+#plot
+ggplot( data.frame( k = rep(1:20, 1), 
+                    Error = errorRates),
+  aes( x = k, y = Error) ) + geom_line() + 
+  coord_cartesian( ylim = c(0, 0.25) ) +
+  ggtitle("Misclassification Rate for each K Value")
+```
+*As seen in the code above and the plot of error rates for each model, k=3 or k=4 seems to be the best model as they produce the smallest error rates and are nearly equivalent.*
+
+*VI.Summarize your procedure*
+
+*In words, summarize the cross-validation procedure. Comment on the range of models you considered, and calculate the error rate of the “best” model using the holdout set.*
+
+*The cross validation procedure is a resampling method that is used for model assesment and selction. In this case, it is used to find the optimal k-value (model) for the nearest neighbor algorithm. In the Hold Out Set Cross Validation procedure (which was used in this project), we randomly divide the training data into different training sets called folds or v-folds after first removing a small sample (anywhere from 20% to 40%; we used 25% in this project) from the training set and allocate it as the "hold out" set. This hold out set/test set will be used to test our models on. Each of the training folds is its own unique, randomly generated training set from the original training set and is used to build the model. We cross validate and choose the model based on the average prediction error for the test sets; that is, the average misclassification rates or each of our models (k=1:20 in this case). In this project we used the above-mentioned hold out set which was 25% of the original training data and divided the remaining data into five folds or sub-training sets of a randomized 750 observations each. For our cross validation procedure, the range of models we built and assessed error rates for were k = 1 through 20. We found that the most accurate model (or model having the smallest error rate) was k = 3, or 3 nearest neighbors.*
+
+```{r}
+# classifying the holdout set with "best" model (k=3)
+# Train/test features and labels for holdout set using chosen model (k=3): 
+trainFeat2 = data.matrix(crossvalid_df[,2:785])
+trainLabel2 = crossvalid_df$label
+testFeat2 = data.matrix(holdout_df[,2:785])
+testLabel2 = holdout_df$label
+
+# Step 1: calculate distances
+sampleDist = calcDist( testFeat = testFeat2, trainFeat = trainFeat2 )
+
+# Step 2: find the k nearest neighbors
+sampleNN = findNN(distances = sampleDist, k = 3)
+
+# Step 3: classify
+holdoutClass2 = classifyNN( NNmat = sampleNN, trainLabels = trainLabel2 )
+
+calcError(sampleClass = holdoutClass2, testLabel = testLabel2)
+#k=4: error rate of 8.48% when I ran
+#k=3: error rate of 7.76% when I ran (chosen model)
+```
+
+*VII. Out-of-sample prediction*
+
+*Finally, use your prediction model to classify the 5000 images in the test set (i.e., testProject.csv). Save the classifications as a .csv file.*
+
+```{r}
+Final_trainFeat = data.matrix(train[,2:785])
+Final_trainLabel = train[,1]
+Final_testFeat = data.matrix(test)
+
+# Step 1: calculate distances
+sampleDist = calcDist( testFeat = Final_testFeat, trainFeat = Final_trainFeat )
+
+# Step 2: find the k nearest neighbors
+sampleNN = findNN(distances = sampleDist, k = 3)
+
+# Step 3: classify (use default p = 0.5 for now)
+testClass = classifyNN( NNmat = sampleNN, trainLabels = Final_trainLabel )
+```
+
+
+```{r testClass csv}
+# write the prediction vector for the unlabeled test set into a single-column csv
+write.table(testClass, file = "testClass.csv", sep = ",", row.names = F, col.names = F)
+
+testClass_num = as.integer(testClass)
+
+#testClass with numeric data type in a single column csv
+write.table(testClass_num, file = "testClass_num.csv", sep = ",", row.names=F, col.names=F)
+```
+
+```{r }
+#write the numeric and character versions of the unlabeled test set prediction vector (testClass) into a single-row csv
+write.csv(t(testClass), file ="testClass_row.csv", row.names=FALSE)
+
+write.csv(t(testClass_num), file ="testClass_num_row.csv", row.names=FALSE)
+```
+
